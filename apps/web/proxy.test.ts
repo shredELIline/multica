@@ -119,6 +119,30 @@ describe("proxy legacy workspace route redirects", () => {
     );
   });
 
+  // alexey-cloud fork: `/` is an app entry point on a private self-host, so it
+  // never serves the marketing landing. The landing itself stays at /homepage.
+  it("sends logged-out app-host root visits to login", () => {
+    expect(redirectLocation("/")).toBe("https://app.multica.test/login");
+  });
+
+  it("sends logged-in app-host root visits without a workspace cookie to login", () => {
+    expect(redirectLocation("/", { multica_logged_in: "1" })).toBe(
+      "https://app.multica.test/login",
+    );
+  });
+
+  it.each(["multica.ai", "www.multica.ai"])(
+    "leaves the logged-out marketing root on the public site on %s",
+    (host) => {
+      expect(redirectLocation("/", {}, host)).toBeNull();
+    },
+  );
+
+  it("does not touch /homepage, which still serves the landing page", () => {
+    expect(redirectLocation("/homepage")).toBeNull();
+    expect(redirectLocation("/homepage", sessionCookies)).toBeNull();
+  });
+
   it.each(["multica.ai", "www.multica.ai"])(
     "does not redirect public marketing root on %s",
     (host) => {
