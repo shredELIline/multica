@@ -9,6 +9,22 @@ set +e
 fail=0
 check() { if [ "$1" = 0 ]; then echo "  ok   $2"; else echo "  FAIL $2"; fail=1; fi; }
 
+# Does an image built at $1 still correspond to this checkout's source?
+#
+# Exactly HEAD is the easy yes. But .dockerignore keeps docs/, scripts/ and
+# .github/ out of the build context entirely, so a commit touching only those
+# cannot change what was built — and refusing to call such an image current
+# would mean every documentation edit "fails" verification until someone burns
+# a twelve-minute rebuild to change nothing. Anything that could have reached
+# the image is still a hard mismatch.
+image_is_current() {
+  local rev="$1"
+  [ "$rev" = "$ALEXEY_CLOUD_COMMIT" ] && return 0
+  git merge-base --is-ancestor "$rev" HEAD 2>/dev/null || return 1
+  [ -z "$(git diff --name-only "$rev" HEAD -- \
+            ':(exclude)docs' ':(exclude)scripts' ':(exclude).github')" ]
+}
+
 echo "== containers =="
 docker compose "${COMPOSE_FILES[@]}" ps --format '  {{.Name}}  {{.Image}}  {{.Status}}'
 
@@ -25,7 +41,13 @@ for svc in backend frontend; do
        branch={{index .Config.Labels \"cloud.alexey.branch\"}}
        base={{index .Config.Labels \"cloud.alexey.upstream-base\"}}"
   rev="$(docker image inspect "$img" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
-  [ "$rev" = "$ALEXEY_CLOUD_COMMIT" ]; check $? "$svc image was built from $ALEXEY_CLOUD_SHORT"
+  image_is_current "$rev"
+  rc=$?
+  if [ "$rc" = 0 ] && [ "$rev" != "$ALEXEY_CLOUD_COMMIT" ]; then
+    check 0 "$svc image built from ${rev:0:9}; checkout is ahead only by files .dockerignore excludes"
+  else
+    check $rc "$svc image matches this checkout (HEAD $ALEXEY_CLOUD_SHORT)"
+  fi
 done
 
 echo "== health =="

@@ -59,6 +59,9 @@ upstream   https://github.com/multica-ai/multica       (theirs — releases)
 `upstream` fetches `refs/heads/main` and tags only; upstream's in-progress
 feature branches are deliberately not mirrored.
 
+`origin` is SSH, `upstream` is HTTPS. That split is deliberate: upstream is
+public and only ever read, so it needs no credential at all.
+
 Authentication is a dedicated key on this host — no personal key was copied
 here:
 
@@ -67,6 +70,23 @@ here:
 ~/.ssh/id_ed25519_github_alexey_cloud.pub    (registered on GitHub)
 ~/.ssh/config                                 pins that key to github.com
 ```
+
+It is registered as a **repository deploy key on shredELIline/multica with
+write access**, not as an account-wide key. So it authenticates to that one
+repository and nothing else — if this host is ever compromised, the blast
+radius is this fork, not the whole GitHub account.
+
+The practical tell, and the expected output of the identity check:
+
+```bash
+$ ssh -T git@github.com
+Hi shredELIline/multica! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+`Hi shredELIline/multica!` (repo) rather than `Hi shredELIline!` (account) is
+correct here. Exit status 1 from that command is also normal — GitHub gives no
+shell. A repo-scoped key cannot push to any other repository, which is the
+point; do not "fix" that by promoting it to an account key.
 
 ## Branch model
 
@@ -83,8 +103,17 @@ differed from what it replaced by our patch and nothing else.
 Everything this fork owns:
 
 ```bash
-git log --oneline main..alexey-cloud
+BASE=$(git describe --tags --abbrev=0 --match 'v*' alexey-cloud)   # e.g. v0.4.36
+git log  --oneline "$BASE..alexey-cloud"
+git diff --stat      "$BASE..alexey-cloud"
 ```
+
+Diff against the **base tag**, not against `main`. `main` mirrors
+`upstream/main`, which runs ahead of the newest release, so
+`git diff main..alexey-cloud` also reverses whatever upstream has merged since
+the tag and wildly overstates what this fork changed. As of v0.4.36 the honest
+number is 11 files, and exactly one of them (`apps/web/proxy.ts`) is a file
+upstream also owns.
 
 Never rebase `alexey-cloud`, never force push. The deployment is identified by
 commit SHA; rewriting history would orphan running images.

@@ -14,9 +14,13 @@ ALEXEY_CLOUD_UPSTREAM_BASE="$(git describe --tags --abbrev=0 2>/dev/null || echo
 ALEXEY_CLOUD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Human-readable version baked into the binaries and NEXT_PUBLIC_APP_VERSION.
 ALEXEY_CLOUD_VERSION="${ALEXEY_CLOUD_UPSTREAM_BASE}+alexey-cloud.${ALEXEY_CLOUD_SHORT}"
-# Immutable image tag. A dirty tree gets a suffix so an unreproducible build
-# can never be mistaken for a clean one.
-if [ -n "$(git status --porcelain)" ]; then
+# Immutable image tag. A caller may pin one explicitly — that is how a CI-built
+# image is deployed (ALEXEY_CLOUD_TAG=<full-sha> deploy.sh) and how a rollback
+# selects an older build. Otherwise it is derived from HEAD, and a dirty tree
+# gets a suffix so an unreproducible build can never be mistaken for a clean one.
+if [ -n "${ALEXEY_CLOUD_TAG:-}" ]; then
+  :
+elif [ -n "$(git status --porcelain)" ]; then
   ALEXEY_CLOUD_TAG="${ALEXEY_CLOUD_SHORT}-dirty"
 else
   ALEXEY_CLOUD_TAG="${ALEXEY_CLOUD_SHORT}"
