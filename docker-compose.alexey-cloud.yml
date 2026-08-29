@@ -1,0 +1,47 @@
+# alexey-cloud deployment override.
+#
+# Builds the backend/web images from THIS fork instead of pulling the official
+# GHCR images, and stamps every image with the fork commit it was built from so
+# a running container can always be traced back to source.
+#
+# This file is specific to the alexey-cloud branch. Upstream has no file with
+# this name, so merging a new upstream release never conflicts here.
+#
+# Usage (always through the wrapper, which fills in the ALEXEY_CLOUD_* values):
+#   scripts/alexey-cloud/build.sh
+#   scripts/alexey-cloud/deploy.sh
+
+services:
+  backend:
+    image: ${ALEXEY_CLOUD_BACKEND_IMAGE:-ghcr.io/shredeliline/multica-backend}:${ALEXEY_CLOUD_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${ALEXEY_CLOUD_VERSION:-dev}
+        COMMIT: ${ALEXEY_CLOUD_COMMIT:-unknown}
+        DATE: ${ALEXEY_CLOUD_DATE:-unknown}
+      labels:
+        org.opencontainers.image.source: https://github.com/shredELIline/multica
+        org.opencontainers.image.revision: ${ALEXEY_CLOUD_COMMIT:-unknown}
+        org.opencontainers.image.version: ${ALEXEY_CLOUD_VERSION:-dev}
+        org.opencontainers.image.created: ${ALEXEY_CLOUD_DATE:-unknown}
+        cloud.alexey.fork: shredELIline/multica
+        cloud.alexey.branch: ${ALEXEY_CLOUD_BRANCH:-alexey-cloud}
+        cloud.alexey.upstream-base: ${ALEXEY_CLOUD_UPSTREAM_BASE:-unknown}
+
+  frontend:
+    image: ${ALEXEY_CLOUD_WEB_IMAGE:-ghcr.io/shredeliline/multica-web}:${ALEXEY_CLOUD_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_APP_VERSION: ${ALEXEY_CLOUD_VERSION:-dev}
+      labels:
+        org.opencontainers.image.source: https://github.com/shredELIline/multica
+        org.opencontainers.image.revision: ${ALEXEY_CLOUD_COMMIT:-unknown}
+        org.opencontainers.image.version: ${ALEXEY_CLOUD_VERSION:-dev}
+        org.opencontainers.image.created: ${ALEXEY_CLOUD_DATE:-unknown}
+        cloud.alexey.fork: shredELIline/multica
+        cloud.alexey.branch: ${ALEXEY_CLOUD_BRANCH:-alexey-cloud}
+        cloud.alexey.upstream-base: ${ALEXEY_CLOUD_UPSTREAM_BASE:-unknown}
