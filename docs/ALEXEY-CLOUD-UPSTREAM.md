@@ -140,17 +140,34 @@ scripts/alexey-cloud/deploy.sh    # rolls the stack, then runs verify.sh
 immediately using the procedure in `docs/ALEXEY-CLOUD.md`; do not debug a
 half-deployed stack in production.
 
-## 5. Push, and let CI rebuild
+## 5. Push, let CI build, then move the production pin
+
+Production does not run what you built locally in step 3 — that build was the
+test. Production runs the CI-built image, pinned by digest.
 
 ```bash
 git push origin alexey-cloud
-git push origin main            # after fast-forwarding the mirror, below
 ```
 
-Pushing `alexey-cloud` triggers `.github/workflows/alexey-cloud-images.yml`,
-which publishes the same commit to GHCR. Once it is green, alexey-cloud-01 no
-longer needs to build locally — see "Deploying a CI-built image" in
-`docs/ALEXEY-CLOUD.md`.
+That triggers `.github/workflows/alexey-cloud-images.yml`. When the run is
+green:
+
+```bash
+scripts/alexey-cloud/ghcr-digests.sh "$(git rev-parse HEAD)"
+```
+
+Paste both lines into `docker-compose.alexey-cloud.prod.yml`, update the
+`revision` / `base` comment above them, commit, push, and deploy:
+
+```bash
+scripts/alexey-cloud/deploy.sh
+```
+
+The deploy runs the volume, `.env` and database-password preflights, records
+the outgoing digests to `deployments.log` for rollback, and verifies the result.
+
+Do not deploy by tag. CI publishes a moving `alexey-cloud` tag for convenience;
+production pins digests so that what runs is what is committed.
 
 ## Keeping the `main` mirror current
 

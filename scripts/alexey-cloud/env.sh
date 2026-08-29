@@ -33,4 +33,10 @@ export ALEXEY_CLOUD_BRANCH ALEXEY_CLOUD_COMMIT ALEXEY_CLOUD_SHORT \
        ALEXEY_CLOUD_UPSTREAM_BASE ALEXEY_CLOUD_DATE ALEXEY_CLOUD_VERSION \
        ALEXEY_CLOUD_TAG ALEXEY_CLOUD_BACKEND_IMAGE ALEXEY_CLOUD_WEB_IMAGE
 
-COMPOSE_FILES=(-f docker-compose.selfhost.yml -f docker-compose.alexey-cloud.yml)
+# Production runs digest-pinned GHCR images. This set contains no `build:`
+# section at all, so a deploy physically cannot turn into a build.
+COMPOSE_FILES=(-f docker-compose.selfhost.yml -f docker-compose.alexey-cloud.prod.yml)
+
+# Building from source is a separate activity with its own override. Only
+# build.sh uses this set.
+COMPOSE_BUILD_FILES=(-f docker-compose.selfhost.yml -f docker-compose.alexey-cloud.yml)

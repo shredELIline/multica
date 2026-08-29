@@ -140,6 +140,9 @@ docs/ALEXEY-CLOUD*.md
 
 ## How to build
 
+**Not needed for production.** Production pulls from GHCR; this is for local
+iteration and for the pre-merge test in the upstream-update procedure.
+
 ```bash
 cd /srv/alexey-cloud/multica
 git switch alexey-cloud
@@ -147,8 +150,11 @@ scripts/alexey-cloud/build.sh
 ```
 
 Builds `ghcr.io/shredeliline/multica-backend:<short-sha>` and
-`…/multica-web:<short-sha>` from the current checkout, stamped with OCI labels
-naming the fork, the revision, and the upstream release the branch sits on.
+`…/multica-web:<short-sha>` from the current checkout via
+`docker-compose.alexey-cloud.yml`, stamped with OCI labels naming the fork, the
+revision, and the upstream release the branch sits on. These local tags are
+distinct from the digests production runs, so a local build never disturbs the
+deployed images.
 
 A dirty working tree is tagged `<short-sha>-dirty` and warns. That is a smoke
 test, never a release.
@@ -160,46 +166,100 @@ killer. There is 4 GB of swap, but it is a safety net, not a budget.
 For reference, upstream's own commands still work and are untouched:
 `make selfhost` pulls the official images; `make selfhost-build` builds from
 the checkout as `multica-backend:dev` / `multica-web:dev`. Neither knows about
-the fork's tags or labels, so use the scripts above for anything you intend to
-deploy.
+the fork's digests or labels, so never use them to deploy.
 
 ## How production is deployed
+
+**Production runs immutable, digest-pinned images pulled from GHCR. The VPS is
+not a build machine.**
 
 ```bash
 scripts/alexey-cloud/deploy.sh
 ```
 
-It refuses to run unless both images exist (pulling them if the tag is in
-GHCR), rolls the stack with `docker compose up -d --no-build`, waits for
-`/readyz`, then runs `verify.sh` and exits non-zero if anything fails.
+That is the whole production deployment command. It:
 
-`--no-build` is deliberate: a deploy can never quietly become an unrecorded
-build.
+1. refuses to continue if either data volume is missing;
+2. compares `.env` against the migration baseline and warns on any difference;
+3. runs the database password preflight (see the trap section below) and
+   **aborts before recreating anything** if the stored password has drifted;
+4. appends the current container IDs, image IDs, volumes and `.env` checksum to
+   `/srv/alexey-cloud/backups/multica-migration/deployments.log`, so a rollback
+   target always exists on disk;
+5. pulls the pinned digests if they are not already local;
+6. runs `docker compose up -d --no-build`, waits for `/readyz`, then execs
+   `verify.sh` and exits non-zero if any check fails.
 
-Named volumes and `.env` are carried through untouched — compose recreates only
-the containers whose definition changed, and the project name stays `multica`,
-so `multica_pgdata` and `multica_backend_uploads` are reattached as-is.
+Extra arguments are forwarded to `up`, so a deliberate full recreation is
+`scripts/alexey-cloud/deploy.sh --force-recreate` and still runs every preflight
+rather than bypassing them.
 
-### Deploying a CI-built image
+### Why digests, not tags
 
-Once `.github/workflows/alexey-cloud-images.yml` has published a commit:
+`docker-compose.alexey-cloud.prod.yml` pins both services by **digest**:
 
-```bash
-ALEXEY_CLOUD_TAG=<full-40-char-commit-sha> scripts/alexey-cloud/deploy.sh
+```yaml
+image: ghcr.io/shredeliline/multica-backend@sha256:93cd4ffc…
 ```
 
-CI tags images with the full commit SHA (plus a moving `alexey-cloud` tag, and
-the tag name for `ac-v*` releases). Deploy by SHA — the moving tag is for
-convenience, not for production.
+A tag is a mutable pointer — anyone who can push to the registry can repoint
+`alexey-cloud`, or even a commit-SHA tag, at different bytes. A digest names
+the bytes themselves. Pinning it in a committed file means the deployed
+artefact is recorded in version control instead of inferred from the registry's
+current state, and `verify.sh` asserts that what is running is exactly what is
+committed.
 
-This is the target steady state: the VPS pulls immutable images and stops being
-a build machine.
+That file also contains **no `build:` section at all**, which is what makes
+"production never builds" structural rather than a convention: a missing image
+is a hard failure, not a silent local compile. Building is a separate activity
+with its own override (`docker-compose.alexey-cloud.yml`) used only by
+`build.sh`.
+
+Both refs are overridable, so a rollback needs no edit:
+
+```bash
+ALEXEY_CLOUD_BACKEND_REF=ghcr.io/shredeliline/multica-backend@sha256:… \
+ALEXEY_CLOUD_WEB_REF=ghcr.io/shredeliline/multica-web@sha256:…       \
+  scripts/alexey-cloud/deploy.sh
+```
+
+### Moving the pin to a new build
+
+CI publishes on every push to `alexey-cloud`. To adopt a new build:
+
+```bash
+git push origin alexey-cloud                 # CI builds and pushes to GHCR
+# wait for the run to go green, then:
+scripts/alexey-cloud/ghcr-digests.sh <full-40-char-commit-sha>
+# paste both lines into docker-compose.alexey-cloud.prod.yml, commit, then:
+scripts/alexey-cloud/deploy.sh
+```
+
+`ghcr-digests.sh` resolves the digests anonymously against the registry. Note
+that CI tags images with the **full 40-character** commit SHA — the 9-character
+short form used for local builds does not exist in GHCR.
+
+### GHCR access
+
+Both packages are public, so the VPS pulls anonymously and holds **no registry
+credentials at all** — there is no `~/.docker/config.json` on this host and no
+personal access token to rotate or leak. Keep it that way: if the packages ever
+go private, prefer making them public again over putting a token on the box.
+
+Named volumes and `.env` are carried through every deploy untouched. The
+compose project name stays `multica`, so `multica_pgdata` and
+`multica_backend_uploads` are reattached as-is.
 
 ## How to check health
 
 ```bash
-scripts/alexey-cloud/verify.sh          # everything below, with pass/fail
+scripts/alexey-cloud/verify.sh          # deployment: images, provenance, routes
+scripts/alexey-cloud/postboot-verify.sh # the above plus host, boot units, data
 ```
+
+`postboot-verify.sh` is the one to run after a reboot — or before one, to
+confirm the box is reboot-ready. It is read-only: it starts nothing and repairs
+nothing.
 
 Individually:
 
@@ -229,6 +289,12 @@ docker inspect "$(docker compose -f docker-compose.selfhost.yml ps -q backend)" 
 An official `ghcr.io/multica-ai/*` image has no such label, so `verify.sh`
 fails against it rather than passing silently. The backend independently
 reports its build commit at `/health`.
+
+`verify.sh` additionally asserts that each running container is referenced by
+**digest** rather than a mutable tag, that the digest sits in the fork's GHCR
+namespace, and that it is byte-for-byte the digest committed in
+`docker-compose.alexey-cloud.prod.yml`. Together those turn "we think the fork
+is running" into something checkable in one command.
 
 ## How to inspect logs
 
@@ -269,10 +335,14 @@ files mode 600), outside the repository so they cannot be committed.
 Read this before any upgrade. It cost the first deployment ten minutes of
 downtime and it will recur.
 
-`docker compose up` **recreates a container whenever its definition changes —
-including when the set of `-f` files changes**, because compose records that
-list in a `com.docker.compose.project.config_files` label. Recreating a
-container makes it re-read `.env`.
+`docker compose up` recreates a container whenever its **resolved
+configuration** changes, and recreating a container makes it re-read `.env`.
+
+Do not try to predict which containers that will hit. Observed on this box: the
+first fork deploy recreated all three containers including postgres, while the
+later GHCR deploy recreated only backend and frontend. Assume any deploy — and
+certainly `--force-recreate`, a host reboot, or a `docker compose up` after an
+upstream change — can recreate postgres.
 
 PostgreSQL, by contrast, only reads `POSTGRES_PASSWORD` at `initdb` time. After
 that the password lives in the volume. So if `.env` is ever regenerated after
@@ -346,50 +416,59 @@ touch the volume, and it does not remove the database.
 
 ## How to roll back
 
-The official images are still on disk and were never overwritten — the fork
-uses different image names entirely — so rolling back is a compose flag, not a
-rebuild.
+Three targets, cheapest first. None of them rebuilds, and none touches a volume.
 
-**Rollback to the previous fork build** (the normal case — a bad patch):
+**1. Roll back to an earlier fork build (the normal case — a bad change).**
+Every deploy appends the refs it replaced to
+`/srv/alexey-cloud/backups/multica-migration/deployments.log`, so the previous
+digests are on disk:
 
 ```bash
-git switch alexey-cloud
-git log --oneline -5                                  # pick the last good commit
-ALEXEY_CLOUD_TAG=<previous-short-sha> scripts/alexey-cloud/deploy.sh
+tail -20 /srv/alexey-cloud/backups/multica-migration/deployments.log
+ALEXEY_CLOUD_BACKEND_REF=ghcr.io/shredeliline/multica-backend@sha256:<old> \
+ALEXEY_CLOUD_WEB_REF=ghcr.io/shredeliline/multica-web@sha256:<old>       \
+  scripts/alexey-cloud/deploy.sh
 ```
 
-If that image is gone, check out the commit and rebuild:
-`git switch --detach <sha> && scripts/alexey-cloud/build.sh && scripts/alexey-cloud/deploy.sh`.
+Then edit `docker-compose.alexey-cloud.prod.yml` back to those digests and
+commit, so the committed pin and the running stack agree again — otherwise the
+next plain `deploy.sh` rolls you forward into the bad build.
 
-**Rollback to the official upstream images** (the escape hatch — the fork build
-is broken and you want the box working now):
+Older digests are also resolvable from the registry at any time:
+`scripts/alexey-cloud/ghcr-digests.sh <full-40-char-commit-sha>`.
+
+**2. Roll back to the locally built images** (still on disk, different tags, so
+they were never overwritten):
+
+```bash
+ALEXEY_CLOUD_BACKEND_REF=ghcr.io/shredeliline/multica-backend:c4c275544 \
+ALEXEY_CLOUD_WEB_REF=ghcr.io/shredeliline/multica-web:c4c275544         \
+  scripts/alexey-cloud/deploy.sh
+```
+
+**3. Roll back to the official upstream images (the escape hatch — the fork
+build is broken and you want the box working now).** Drop the fork override
+entirely; the base file resolves back to
+`ghcr.io/multica-ai/multica-{backend,web}:latest`, which are still on disk at
+the IDs recorded in `state-*.txt`:
 
 ```bash
 cd /srv/alexey-cloud/multica
-docker compose -f docker-compose.selfhost.yml up -d      # no fork override
-docker compose -f docker-compose.selfhost.yml ps
+docker compose -f docker-compose.selfhost.yml up -d
 curl -fsS http://127.0.0.1:8080/readyz
 ```
 
-Dropping the `-f docker-compose.alexey-cloud.yml` override is the whole
-rollback: the base file resolves back to
-`ghcr.io/multica-ai/multica-{backend,web}:latest`. To pin the exact images that
-were running before the migration rather than whatever `:latest` points at now,
-use the digests recorded in
-`/srv/alexey-cloud/backups/multica-migration/state-*.txt`:
-
-```bash
-docker run --rm ghcr.io/multica-ai/multica-backend@sha256:<digest> --version   # sanity
-MULTICA_IMAGE_TAG=<tag> docker compose -f docker-compose.selfhost.yml up -d
-```
+Note this path skips `deploy.sh` and therefore skips the database password
+preflight. Run `scripts/alexey-cloud/postboot-verify.sh` afterwards, and if the
+backend cannot authenticate, `scripts/alexey-cloud/sync-db-password.sh`.
 
 **What rollback does not undo:** database migrations. They run on backend
 startup and are forward-only. Rolling an image back to a version older than the
 schema can fail at `/readyz`. That is what the pre-update `pg_dump` is for —
 restore it, then start the older image.
 
-Both rollback paths reuse the same `.env`, the same containers' volumes, and
-the same database. Nothing is deleted.
+All three paths reuse the same `.env`, the same volumes, and the same database.
+Nothing is deleted.
 
 ## What MUST NOT be deleted
 

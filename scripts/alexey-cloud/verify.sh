@@ -33,13 +33,30 @@ for svc in backend frontend; do
   cid="$(docker compose "${COMPOSE_FILES[@]}" ps -q "$svc")"
   [ -n "$cid" ] || { echo "  FAIL $svc has no container"; fail=1; continue; }
   img="$(docker inspect "$cid" --format '{{.Image}}')"
+  ref="$(docker inspect "$cid" --format '{{.Config.Image}}')"
+  case "$ref" in
+    *@sha256:*) check 0 "$svc runs a digest-pinned image, not a mutable tag" ;;
+    *)          check 1 "$svc runs a digest-pinned image (found tag ref: $ref)" ;;
+  esac
+  case "$ref" in
+    ghcr.io/shredeliline/*) check 0 "$svc image comes from the fork's GHCR namespace" ;;
+    *)                     check 1 "$svc image comes from the fork's GHCR namespace (found $ref)" ;;
+  esac
+  # The pinned digest must be the one the compose files declare, so that what
+  # is running is what is committed — not whatever happened to be pulled.
+  if docker compose "${COMPOSE_FILES[@]}" config --images 2>/dev/null | grep -qxF "$ref"; then
+    check 0 "$svc digest matches the pin in docker-compose.alexey-cloud.prod.yml"
+  else
+    check 1 "$svc digest matches the pin in docker-compose.alexey-cloud.prod.yml"
+  fi
   docker image inspect "$img" --format \
     "  $svc  id={{.Id}}
        repo={{index .RepoTags 0}}
        source={{index .Config.Labels \"org.opencontainers.image.source\"}}
        revision={{index .Config.Labels \"org.opencontainers.image.revision\"}}
        branch={{index .Config.Labels \"cloud.alexey.branch\"}}
-       base={{index .Config.Labels \"cloud.alexey.upstream-base\"}}"
+       base={{index .Config.Labels \"cloud.alexey.upstream-base\"}}
+       ref=$ref"
   rev="$(docker image inspect "$img" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
   image_is_current "$rev"
   rc=$?

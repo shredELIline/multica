@@ -1,0 +1,31 @@
+# alexey-cloud PRODUCTION pin.
+#
+# Deliberately has no `build:` section anywhere. Production consumes immutable
+# images from GHCR and cannot silently fall back to building on the VPS — if an
+# image is missing, the deploy fails instead of quietly compiling one.
+#
+# Images are pinned by DIGEST, not by tag. A tag is a mutable pointer: whoever
+# can push to the registry can repoint `alexey-cloud` or even a SHA tag at
+# different bytes. A digest names the bytes themselves, so what is written here
+# is exactly what will run, and the deployed artefact is recorded in version
+# control rather than inferred from the registry's current state.
+#
+# The refs are overridable so a rollback does not need an edit:
+#   ALEXEY_CLOUD_BACKEND_REF=…@sha256:… \
+#   ALEXEY_CLOUD_WEB_REF=…@sha256:…     scripts/alexey-cloud/deploy.sh
+#
+# Updating the pin after a new CI build:
+#   scripts/alexey-cloud/ghcr-digests.sh <full-40-char-commit-sha>
+# then paste the two digests below and commit.
+#
+# Pinned build:
+#   revision  c4c275544f4dba33122862190faf91b9428dd360  (alexey-cloud)
+#   base      upstream release v0.4.36
+#   built by  .github/workflows/alexey-cloud-images.yml
+
+services:
+  backend:
+    image: ${ALEXEY_CLOUD_BACKEND_REF:-ghcr.io/shredeliline/multica-backend@sha256:93cd4ffcd8d8056b21193e7a0f0ba1a224c942da6b1b48c71c21552fd211f342}
+
+  frontend:
+    image: ${ALEXEY_CLOUD_WEB_REF:-ghcr.io/shredeliline/multica-web@sha256:fd52af317dbf99da262740e5086f65f655cb6a6041dc8c523cdfb5ce305cf286}

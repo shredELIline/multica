@@ -17,7 +17,7 @@ echo "    web:     ${ALEXEY_CLOUD_WEB_IMAGE}:${ALEXEY_CLOUD_TAG}"
 
 # Serial, not parallel: this VPS has 12 GB RAM and the Next.js build is the
 # memory-hungry half. Two concurrent builds is how you meet the OOM killer.
-docker compose "${COMPOSE_FILES[@]}" build --parallel=1 "$@"
+docker compose "${COMPOSE_BUILD_FILES[@]}" build --parallel=1 "$@"
 
 echo
 echo "==> Built images"
