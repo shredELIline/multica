@@ -250,6 +250,82 @@ Named volumes and `.env` are carried through every deploy untouched. The
 compose project name stays `multica`, so `multica_pgdata` and
 `multica_backend_uploads` are reattached as-is.
 
+## How Multica is reached
+
+Multica is reachable **only from this tailnet**, at:
+
+```
+https://alexey-multica.tail21246b.ts.net
+```
+
+The Linux hostname stays `alexey-cloud-01`; `alexey-multica` is the Tailscale
+node name, which is what MagicDNS publishes. There is no public port, no
+Funnel, no SSH tunnel, and no UFW change — the whole path is:
+
+```
+Tailscale device
+  -> tailscale serve (TLS terminated, Let's Encrypt cert, tailnet only)
+    -> 127.0.0.1:8443  Caddy, single-origin router
+      -> 127.0.0.1:8080  backend   (/health, /readyz, /healthz, /ws, /api/daemon/ws)
+      -> 127.0.0.1:3000  frontend  (everything else)
+```
+
+Every listener on the box is on loopback. `tailscale serve` is the only thing
+bridging the tailnet to them, and it is a userspace proxy inside tailscaled —
+it opens no host port.
+
+Serve config (idempotent; re-running it is safe):
+
+```bash
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8443
+tailscale serve status        # must say "(tailnet only)"
+tailscale funnel status       # must NOT say "Funnel on"
+```
+
+The router lives in `scripts/alexey-cloud/caddy/Caddyfile` (tracked) and
+`/etc/caddy/Caddyfile` (live). See that directory's README for the install
+procedure and the two constraints that are easy to break.
+
+### Why these exact routes
+
+`/health` is what `multica setup` probes and needs a 200 from; the web release
+does not forward it. `/ws` is the browser realtime socket and `/api/daemon/ws`
+is the daemon's long connection — the web image cannot proxy WebSocket
+upgrades, so both must reach the backend directly, and without the
+`/api/daemon/ws` route the daemon handshake fails and it silently degrades to
+polling. `/readyz` and `/healthz` are additions to the upstream single-origin
+example, which omits them because it assumes a separate API origin.
+
+Check that the WebSocket routes still reach the **backend** rather than the
+frontend — the backend answers with JSON, a misrouted request gets Next.js HTML:
+
+```bash
+curl -s -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+     -H 'Sec-WebSocket-Version: 13' -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom|base64)" \
+     https://alexey-multica.tail21246b.ts.net/api/daemon/ws
+# {"error":"missing authorization header"}   <- correct: that is the backend
+```
+
+### The URL lives in .env too
+
+`FRONTEND_ORIGIN`, `MULTICA_APP_URL` and `MULTICA_DAEMON_SERVER_URL` are all
+set to the tailnet URL. `daemon_server_url` in `/api/config` is what daemons
+actually dial, resolved as `MULTICA_DAEMON_SERVER_URL` -> `MULTICA_PUBLIC_URL`
+-> `MULTICA_APP_URL` -> `FRONTEND_ORIGIN`:
+
+```bash
+curl -s https://alexey-multica.tail21246b.ts.net/api/config \
+  | grep -o '"daemon_server_url":"[^"]*"'
+```
+
+<b>Consequence worth knowing:</b> the backend derives the session-cookie
+`Secure` flag from `FRONTEND_ORIGIN`'s scheme
+(`server/internal/auth/cookie.go:114`). Now that it is `https://`, cookies are
+`Secure`, and browsers drop those on plain HTTP — so reaching the app on
+`http://127.0.0.1:3000` through an SSH tunnel still renders pages but **login
+no longer works there**. The tailnet URL is the only working entry point. Do
+not "fix" this by reverting `FRONTEND_ORIGIN` to http.
+
 ## How to check health
 
 ```bash

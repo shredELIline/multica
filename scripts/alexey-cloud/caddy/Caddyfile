@@ -1,0 +1,54 @@
+# alexey-cloud single-origin reverse proxy for Multica.
+#
+# Reached ONLY through `tailscale serve`, which terminates TLS for
+# https://alexey-multica.tail21246b.ts.net and forwards to 127.0.0.1:8443.
+# The listener is bound to loopback, so nothing here sits on a routable
+# interface and no port is opened in UFW.
+#
+# The route set follows the documented single-origin configuration in
+# apps/docs/content/docs/self-host-quickstart.mdx, plus /readyz and /healthz,
+# which that example omits because it assumes a separate API origin.
+#
+# No X-Forwarded-Proto rewriting: the backend derives the session-cookie Secure
+# flag from FRONTEND_ORIGIN's scheme, not from request headers
+# (server/internal/auth/cookie.go:114).
+
+{
+	admin 127.0.0.1:2019
+	auto_https off
+}
+
+:8443 {
+	bind 127.0.0.1
+
+	# CLI reachability probe (`multica setup` GETs <server-url>/health and needs
+	# a 200) plus readiness. The web release forwards none of these.
+	@backend_health path /health /readyz /healthz
+	handle @backend_health {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	# Browser realtime WebSocket. The web image cannot proxy WS upgrades, so it
+	# must reach the backend directly; the backend registers /ws
+	# (server/cmd/server/router.go:1279).
+	@browser_ws path /ws /ws/*
+	handle @browser_ws {
+		reverse_proxy 127.0.0.1:8080 {
+			flush_interval -1
+		}
+	}
+
+	# Daemon long-connection WebSocket. Daemons dial {server-url}/api/daemon/ws,
+	# not /ws (server/cmd/server/router.go:1381). Without this route the
+	# handshake fails and the daemon silently falls back to polling.
+	handle /api/daemon/ws {
+		reverse_proxy 127.0.0.1:8080 {
+			flush_interval -1
+		}
+	}
+
+	# Everything else to the frontend, which forwards API and login requests.
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}

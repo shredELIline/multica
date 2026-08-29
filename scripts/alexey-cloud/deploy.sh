@@ -12,7 +12,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
 BACKUPS=/srv/alexey-cloud/backups/multica-migration
-BASELINE_ENV="$BACKUPS/.env.20260829T090145Z"
+BASELINE_ENV="$BACKUPS/.env.baseline.20260829T121251Z"
 RECORD="$BACKUPS/deployments.log"
 
 echo "== preflight =="
@@ -31,7 +31,7 @@ done
 #    contents.
 if [ -f "$BASELINE_ENV" ]; then
   if cmp -s .env "$BASELINE_ENV"; then
-    echo "  ok   .env identical to the migration baseline"
+    echo "  ok   .env identical to the current baseline"
   else
     echo "  WARN .env differs from $BASELINE_ENV"
     echo "       sha256 now:      $(sha256sum .env      | cut -c1-16)…"

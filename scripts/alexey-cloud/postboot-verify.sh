@@ -82,8 +82,8 @@ echo "  $counts"
 [ "$counts" = "migrations=469" ]; check $? "schema_migrations still 469 (pre-migration baseline)"
 
 echo "== .env =="
-cmp -s .env /srv/alexey-cloud/backups/multica-migration/.env.20260829T090145Z
-check $? ".env identical to the migration baseline"
+cmp -s .env /srv/alexey-cloud/backups/multica-migration/.env.baseline.20260829T121251Z
+check $? ".env identical to the current baseline"
 
 echo
 [ "$fail" = 0 ] && echo "REBOOT READINESS: ALL CHECKS PASSED" || echo "REBOOT READINESS: SOME CHECKS FAILED"
