@@ -1,0 +1,120 @@
+# Build the alexey-cloud deployment images and push them to GHCR.
+#
+# This workflow belongs to the shredELIline/multica fork. It exists so that
+# alexey-cloud-01 can stop being the build machine and go back to consuming
+# immutable images.
+#
+# It does NOT deploy. Deployment stays a human running
+# scripts/alexey-cloud/deploy.sh on the VPS (see DEC-008). Wiring a deploy step
+# in here would mean putting a long-lived credential for the VPS on GitHub, and
+# that is a separate decision to make deliberately.
+
+name: alexey-cloud images
+
+on:
+  push:
+    branches: [alexey-cloud]
+    tags: ["ac-v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: alexey-cloud-images-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: backend
+            image: multica-backend
+            dockerfile: Dockerfile
+            title: Multica Backend (alexey-cloud)
+          - component: web
+            image: multica-web
+            dockerfile: Dockerfile.web
+            title: Multica Web (alexey-cloud)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # describe --tags needs the upstream release tags to resolve the base
+          # this branch sits on.
+          fetch-depth: 0
+
+      - name: Resolve version metadata
+        id: version
+        run: |
+          base="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo unknown)"
+          short="$(git rev-parse --short=9 HEAD)"
+          {
+            echo "base=$base"
+            echo "version=${base}+alexey-cloud.${short}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Matches upstream's own naming (`ghcr.io/<owner>/multica-backend`),
+          # so the images stay drop-in compatible with
+          # docker-compose.selfhost.yml's MULTICA_*_IMAGE variables.
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=ref,event=tag
+            type=raw,value=alexey-cloud,enable=${{ github.ref == 'refs/heads/alexey-cloud' }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            cloud.alexey.fork=${{ github.repository }}
+            cloud.alexey.branch=${{ github.ref_name }}
+            cloud.alexey.upstream-base=${{ steps.version.outputs.base }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          # linux/amd64 only: alexey-cloud-01 is x86_64. Add linux/arm64 here
+          # if the deployment ever moves to an arm host — it doubles build time.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=alexey-cloud-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=alexey-cloud-${{ matrix.component }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ github.event.repository.updated_at }}
+            NEXT_PUBLIC_APP_VERSION=${{ steps.version.outputs.version }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### ${{ matrix.image }}"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo "Deploy on alexey-cloud-01 with:"
+            echo '```bash'
+            echo "ALEXEY_CLOUD_TAG=${{ github.sha }} scripts/alexey-cloud/deploy.sh"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

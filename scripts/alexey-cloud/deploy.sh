@@ -7,12 +7,19 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
+# Both images must exist locally before anything is recreated. A CI-built tag
+# is pulled on demand; a locally built one is expected to be there already.
 for img in "${ALEXEY_CLOUD_BACKEND_IMAGE}:${ALEXEY_CLOUD_TAG}" \
            "${ALEXEY_CLOUD_WEB_IMAGE}:${ALEXEY_CLOUD_TAG}"; do
-  docker image inspect "$img" >/dev/null 2>&1 || {
-    echo "ERROR: $img not built. Run scripts/alexey-cloud/build.sh first." >&2
-    exit 1
-  }
+  if ! docker image inspect "$img" >/dev/null 2>&1; then
+    echo "==> $img not present locally, pulling"
+    docker pull "$img" || {
+      echo "ERROR: $img is neither built locally nor pullable." >&2
+      echo "       Build it with scripts/alexey-cloud/build.sh, or set" >&2
+      echo "       ALEXEY_CLOUD_TAG to a tag that exists in GHCR." >&2
+      exit 1
+    }
+  fi
 done
 
 echo "==> Deploying ${ALEXEY_CLOUD_VERSION} (tag ${ALEXEY_CLOUD_TAG})"
