@@ -29,6 +29,7 @@ services:
         cloud.alexey.fork: shredELIline/multica
         cloud.alexey.branch: ${ALEXEY_CLOUD_BRANCH:-alexey-cloud}
         cloud.alexey.upstream-base: ${ALEXEY_CLOUD_UPSTREAM_BASE:-unknown}
+        cloud.alexey.describe: ${ALEXEY_CLOUD_DESCRIBE:-unknown}
 
   frontend:
     image: ${ALEXEY_CLOUD_WEB_IMAGE:-ghcr.io/shredeliline/multica-web}:${ALEXEY_CLOUD_TAG:-local}
@@ -45,3 +46,4 @@ services:
         cloud.alexey.fork: shredELIline/multica
         cloud.alexey.branch: ${ALEXEY_CLOUD_BRANCH:-alexey-cloud}
         cloud.alexey.upstream-base: ${ALEXEY_CLOUD_UPSTREAM_BASE:-unknown}
+        cloud.alexey.describe: ${ALEXEY_CLOUD_DESCRIBE:-unknown}

@@ -324,6 +324,53 @@ namespace, and that it is byte-for-byte the digest committed in
 `docker-compose.alexey-cloud.prod.yml`. Together those turn "we think the fork
 is running" into something checkable in one command.
 
+### Version metadata, and why CI fetches upstream tags
+
+Beyond provenance, each image carries descriptive build metadata:
+
+| Label / build arg | Example | Source |
+| --- | --- | --- |
+| `cloud.alexey.upstream-base` | `v0.4.36` | `git describe --tags --abbrev=0 --match 'v*'` |
+| `cloud.alexey.describe` | `v0.4.36-7-gfbef34b5d` | `git describe --tags --long --match 'v*' --abbrev=9` |
+| `org.opencontainers.image.version`, `VERSION`, `NEXT_PUBLIC_APP_VERSION` | `v0.4.36+alexey-cloud.fbef34b5d` | `<base>+alexey-cloud.<short-sha>` |
+
+`--match 'v*'` matters: the repository also carries `desktop-v*` tags, and
+without it the nearest tag can be a desktop release rather than the platform
+release this branch is based on.
+
+Read them off a running image with:
+
+```bash
+docker image inspect ghcr.io/shredeliline/multica-backend@sha256:<digest> \
+  --format '{{json .Config.Labels}}' | python3 -m json.tool
+```
+
+GitHub does not copy a parent repository's tags into a fork, and this fork
+deliberately has none of its own (see below), so a plain CI checkout has
+nothing for `git describe` to resolve. `.github/workflows/alexey-cloud-images.yml`
+therefore fetches upstream's release tags into the CI workspace before
+resolving the version:
+
+```yaml
+git -c http.https://github.com/.extraheader= \
+    fetch --no-tags --force "$UPSTREAM_REPO" 'refs/tags/v*:refs/tags/v*'
+```
+
+Three properties of that line are deliberate. The refspec is `v*` only, so
+`desktop-v*` never enters the workspace. The empty `extraheader` drops the
+credential `actions/checkout` configures for github.com, so no token is
+presented to a repository outside this fork — upstream is public and the fetch
+is anonymous. And it writes to the CI workspace only.
+
+**Never push upstream's `v*` tags to the fork instead.** The fork inherits
+upstream's `release.yml`, which triggers on `v*.*.*`; ~100 tags would fire ~100
+Release runs, each invoking goreleaser, publishing binaries to the fork's
+Releases, and pushing images into this GHCR namespace. See DEC-014.
+
+If the tag fetch fails, the workflow fails. It does not fall back to `unknown`:
+an image whose metadata lies about its base is worse than an image that was
+never built, because the pin that follows is chosen from that metadata.
+
 ## How to inspect logs
 
 ```bash

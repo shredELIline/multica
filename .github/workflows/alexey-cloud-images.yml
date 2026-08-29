@@ -25,6 +25,10 @@ permissions:
   contents: read
   packages: write
 
+env:
+  # Read-only, anonymous. Upstream is public; see DEC-013/DEC-014.
+  UPSTREAM_REPO: https://github.com/multica-ai/multica.git
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -44,19 +48,63 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # describe --tags needs the upstream release tags to resolve the base
-          # this branch sits on.
+          # describe --tags needs the full history of this branch. The tags
+          # themselves come from the next step, not from here.
           fetch-depth: 0
 
+      # GitHub does not copy a parent repository's tags into a fork, so a
+      # checkout of shredELIline/multica carries none and `git describe`
+      # resolves nothing -- that is what produced base=unknown (DEC-014).
+      #
+      # Fetch upstream's release tags into the CI workspace ONLY. Never push
+      # them to the fork: the inherited release.yml triggers on `v*.*.*` and
+      # ~100 tags would fire ~100 Release runs, each publishing binaries and
+      # images into this namespace.
+      #
+      # The fetch is anonymous (upstream is public) -- the empty extraheader
+      # drops the credential actions/checkout configured for github.com, so a
+      # token is never presented to a repository outside this fork.
+      - name: Fetch upstream release tags
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if git -c http.https://github.com/.extraheader= \
+                   fetch --no-tags --force "$UPSTREAM_REPO" \
+                   'refs/tags/v*:refs/tags/v*'; then
+              fetched=1
+              break
+            fi
+            echo "attempt $attempt to fetch tags from $UPSTREAM_REPO failed" >&2
+            sleep $((attempt * 5))
+          done
+          if [ "${fetched:-0}" != 1 ]; then
+            echo "::error::could not fetch release tags from $UPSTREAM_REPO"
+            exit 1
+          fi
+          echo "fetched $(git tag --list 'v*' | wc -l) upstream release tags"
+
+      # Fails the build rather than stamping `unknown` into an image that is
+      # then pinned in production. Metadata that lies is worse than no build.
       - name: Resolve version metadata
         id: version
         run: |
-          base="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo unknown)"
+          set -euo pipefail
+          # Nearest upstream release this branch sits on. --match keeps the
+          # component tag namespaces (desktop-v*) out of the base.
+          if ! base="$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>&1)"; then
+            echo "::error::cannot resolve the upstream base tag: $base"
+            exit 1
+          fi
+          # git describe equivalent: <base>-<commits-since>-g<short-sha>.
+          describe="$(git describe --tags --long --match 'v*' --abbrev=9 HEAD)"
           short="$(git rev-parse --short=9 HEAD)"
+          version="${base}+alexey-cloud.${short}"
           {
             echo "base=$base"
-            echo "version=${base}+alexey-cloud.${short}"
+            echo "describe=$describe"
+            echo "version=$version"
           } >> "$GITHUB_OUTPUT"
+          echo "base=$base  describe=$describe  version=$version"
 
       - name: Compute image tags and labels
         id: meta
@@ -76,6 +124,7 @@ jobs:
             cloud.alexey.fork=${{ github.repository }}
             cloud.alexey.branch=${{ github.ref_name }}
             cloud.alexey.upstream-base=${{ steps.version.outputs.base }}
+            cloud.alexey.describe=${{ steps.version.outputs.describe }}
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -9,8 +9,12 @@ cd "$REPO_ROOT"
 ALEXEY_CLOUD_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 ALEXEY_CLOUD_COMMIT="$(git rev-parse HEAD)"
 ALEXEY_CLOUD_SHORT="$(git rev-parse --short=9 HEAD)"
-# Nearest upstream release tag this branch is built on top of.
-ALEXEY_CLOUD_UPSTREAM_BASE="$(git describe --tags --abbrev=0 2>/dev/null || echo unknown)"
+# Nearest upstream release tag this branch is built on top of. --match keeps
+# the component tag namespaces (desktop-v*) out of the base, and matches what
+# .github/workflows/alexey-cloud-images.yml resolves for a CI build.
+ALEXEY_CLOUD_UPSTREAM_BASE="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo unknown)"
+# git describe equivalent: <base>-<commits-since>-g<short-sha>.
+ALEXEY_CLOUD_DESCRIBE="$(git describe --tags --long --match 'v*' --abbrev=9 2>/dev/null || echo unknown)"
 ALEXEY_CLOUD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Human-readable version baked into the binaries and NEXT_PUBLIC_APP_VERSION.
 ALEXEY_CLOUD_VERSION="${ALEXEY_CLOUD_UPSTREAM_BASE}+alexey-cloud.${ALEXEY_CLOUD_SHORT}"
@@ -30,7 +34,8 @@ ALEXEY_CLOUD_BACKEND_IMAGE="${ALEXEY_CLOUD_BACKEND_IMAGE:-ghcr.io/shredeliline/m
 ALEXEY_CLOUD_WEB_IMAGE="${ALEXEY_CLOUD_WEB_IMAGE:-ghcr.io/shredeliline/multica-web}"
 
 export ALEXEY_CLOUD_BRANCH ALEXEY_CLOUD_COMMIT ALEXEY_CLOUD_SHORT \
-       ALEXEY_CLOUD_UPSTREAM_BASE ALEXEY_CLOUD_DATE ALEXEY_CLOUD_VERSION \
+       ALEXEY_CLOUD_UPSTREAM_BASE ALEXEY_CLOUD_DESCRIBE \
+       ALEXEY_CLOUD_DATE ALEXEY_CLOUD_VERSION \
        ALEXEY_CLOUD_TAG ALEXEY_CLOUD_BACKEND_IMAGE ALEXEY_CLOUD_WEB_IMAGE
 
 # Production runs digest-pinned GHCR images. This set contains no `build:`
