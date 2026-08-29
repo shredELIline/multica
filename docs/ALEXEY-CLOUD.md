@@ -275,6 +275,34 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/homepage         
 `readyz` reporting `"migrations":"ok"` is the signal that the schema matches the
 running binary.
 
+### Reboot drill
+
+The stack is expected to come back from a cold boot with no human action beyond
+reconnecting. That is not a claim, it has been exercised:
+
+| Drill | Result |
+| --- | --- |
+| 2026-08-29T10:46:54Z (boot), verified 10:49 UTC | passed, no manual repair |
+
+What came back on its own: SSH over Tailscale (no console needed),
+`docker`, `containerd`, `tailscaled`, `fail2ban`, the UFW ruleset, all three
+containers under `restart: unless-stopped`, and the application on the
+digest-pinned GHCR images. The backend reported `started_at`
+2026-08-29T10:47:26Z — roughly 30 seconds after boot.
+`postboot-verify.sh` printed `REBOOT READINESS: ALL CHECKS PASSED`; no
+container, volume or database repair was needed, and no digest moved.
+
+Re-run the drill after anything that changes boot-time behaviour: a kernel or
+Docker upgrade, a change to restart policies, a new unit, or a firewall change.
+The procedure is `sudo reboot`, wait ~30-60s, reconnect over Tailscale, then:
+
+```bash
+scripts/alexey-cloud/postboot-verify.sh
+```
+
+If the backend is unhealthy after a boot, check the database password preflight
+first (`scripts/alexey-cloud/sync-db-password.sh`) — see the `.env` trap below.
+
 ## How custom images are identified
 
 Provenance is asserted, not assumed. Every fork-built image carries labels
