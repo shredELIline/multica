@@ -264,6 +264,50 @@ cp -a .env "$B/.env.$TS" && chmod 600 "$B/.env.$TS"
 Backups live at `/srv/alexey-cloud/backups/multica-migration/` (mode 700,
 files mode 600), outside the repository so they cannot be committed.
 
+## The `.env` / database password trap
+
+Read this before any upgrade. It cost the first deployment ten minutes of
+downtime and it will recur.
+
+`docker compose up` **recreates a container whenever its definition changes —
+including when the set of `-f` files changes**, because compose records that
+list in a `com.docker.compose.project.config_files` label. Recreating a
+container makes it re-read `.env`.
+
+PostgreSQL, by contrast, only reads `POSTGRES_PASSWORD` at `initdb` time. After
+that the password lives in the volume. So if `.env` is ever regenerated after
+the cluster was created — a second `make selfhost`, a re-provision, anything
+that rewrites the file — the two silently diverge, and **nothing notices**: the
+running containers still hold the original value in their baked environment and
+keep working indefinitely.
+
+The bill arrives at the next recreate. The new backend reads the current `.env`,
+the database still expects the original, and you get:
+
+```
+FATAL: password authentication failed for user "multica" (SQLSTATE 28P01)
+```
+
+The original password is now unrecoverable — it existed only in the container
+that was just replaced. This is not caused by the fork; rolling back to the
+official images recreates the backend from the same `.env` and fails
+identically.
+
+**The repair**, which works because `pg_hba.conf` trusts the local socket
+inside the container:
+
+```bash
+scripts/alexey-cloud/sync-db-password.sh
+```
+
+It sets the role's password to the value already in `.env`. It touches no data
+and does not modify `.env`. The backend clears its restart loop on the next
+retry.
+
+`deploy.sh` now runs this as a preflight and refuses to recreate anything if
+the database rejects the `.env` password — so the failure surfaces while the
+old containers, and the working credential inside them, still exist.
+
 ## How to restore the database
 
 Take a dump (credentials are read inside the container and never printed):

@@ -22,6 +22,26 @@ for img in "${ALEXEY_CLOUD_BACKEND_IMAGE}:${ALEXEY_CLOUD_TAG}" \
   fi
 done
 
+# Preflight: recreating a container makes it re-read .env. If the database's
+# stored password has drifted from POSTGRES_PASSWORD, the old containers are
+# the only place the working value still exists, and the failure only shows up
+# after they are gone. Check while the stack is still up.
+if docker compose "${COMPOSE_FILES[@]}" ps -q postgres | grep -q .; then
+  if docker compose "${COMPOSE_FILES[@]}" exec -T postgres sh -c \
+       'PGPASSWORD="$POSTGRES_PASSWORD" psql -h postgres -U "$POSTGRES_USER" \
+          -d "$POSTGRES_DB" -tAc "select 1"' >/dev/null 2>&1; then
+    echo "==> Preflight: database accepts the password in .env"
+  else
+    echo "ERROR: the database rejects POSTGRES_PASSWORD from .env." >&2
+    echo "       Recreating the containers now would leave the backend unable to" >&2
+    echo "       authenticate. Reconcile them first:" >&2
+    echo "         scripts/alexey-cloud/sync-db-password.sh" >&2
+    echo "       That sets the role password to the value already in .env. It" >&2
+    echo "       touches no data and does not modify .env." >&2
+    exit 1
+  fi
+fi
+
 echo "==> Deploying ${ALEXEY_CLOUD_VERSION} (tag ${ALEXEY_CLOUD_TAG})"
 # --no-build: deploy only what build.sh already produced, so a deploy can never
 # silently become an unrecorded build.
