@@ -9,20 +9,35 @@ set +e
 fail=0
 check() { if [ "$1" = 0 ]; then echo "  ok   $2"; else echo "  FAIL $2"; fail=1; fi; }
 
+# Every path the two Dockerfiles actually COPY. Derived from their COPY lines,
+# not guessed: these are the only files whose contents can end up inside an
+# image, so a commit that leaves all of them alone cannot have changed what was
+# built.
+BUILD_INPUTS=(
+  Dockerfile Dockerfile.web .dockerignore
+  server docker
+  apps/web packages
+  package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json .npmrc
+  LICENSE NOTICE
+)
+
 # Does an image built at $1 still correspond to this checkout's source?
 #
-# Exactly HEAD is the easy yes. But .dockerignore keeps docs/, scripts/ and
-# .github/ out of the build context entirely, so a commit touching only those
-# cannot change what was built — and refusing to call such an image current
-# would mean every documentation edit "fails" verification until someone burns
-# a twelve-minute rebuild to change nothing. Anything that could have reached
-# the image is still a hard mismatch.
+# Exactly HEAD is the easy yes, but it is not the normal case. Digest pinning
+# makes HEAD structurally one commit *ahead* of the deployed revision: CI builds
+# commit X, then the pin naming X's digest is committed as X+1. Demanding an
+# exact match would therefore fail after every correct deploy. Same for a
+# documentation edit.
+#
+# So: accept an ancestor of HEAD whose diff touches no build input, and reject
+# anything else. An allowlist of real build inputs, rather than a denylist of
+# paths assumed harmless — a new top-level file is then treated as suspicious by
+# default instead of being silently ignored.
 image_is_current() {
   local rev="$1"
   [ "$rev" = "$ALEXEY_CLOUD_COMMIT" ] && return 0
   git merge-base --is-ancestor "$rev" HEAD 2>/dev/null || return 1
-  [ -z "$(git diff --name-only "$rev" HEAD -- \
-            ':(exclude)docs' ':(exclude)scripts' ':(exclude).github')" ]
+  [ -z "$(git diff --name-only "$rev" HEAD -- "${BUILD_INPUTS[@]}")" ]
 }
 
 echo "== containers =="
@@ -61,7 +76,7 @@ for svc in backend frontend; do
   image_is_current "$rev"
   rc=$?
   if [ "$rc" = 0 ] && [ "$rev" != "$ALEXEY_CLOUD_COMMIT" ]; then
-    check 0 "$svc image built from ${rev:0:9}; checkout is ahead only by files .dockerignore excludes"
+    check 0 "$svc image built from ${rev:0:9}; checkout is ahead but touches no build input"
   else
     check $rc "$svc image matches this checkout (HEAD $ALEXEY_CLOUD_SHORT)"
   fi
